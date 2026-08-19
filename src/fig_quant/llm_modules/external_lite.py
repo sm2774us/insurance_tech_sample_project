@@ -51,7 +51,7 @@ class ExternalLiteLLM(BaseLLM):
                 temperature=temperature,
                 timeout=self.timeout_sec,
             )
-        except Exception as exc:  # noqa: BLE001 - normalize provider errors
+        except Exception as exc:
             raise RuntimeError(f"External LLM request failed: {exc}") from exc
 
         choice = response["choices"][0]["message"]["content"]

@@ -69,7 +69,7 @@ BHY target FDR (q): <|{fdr_q}|number|step=0.01|>
 """
 
 
-def on_compute_lcb(state) -> None:  # noqa: ANN001 - Taipy state object
+def on_compute_lcb(state) -> None:
     """Recomputes the Bayesian posterior LCB from the bound input.
 
     Args:
@@ -92,7 +92,7 @@ def on_compute_lcb(state) -> None:  # noqa: ANN001 - Taipy state object
         )
 
 
-def on_run_validation(state) -> None:  # noqa: ANN001 - Taipy state object
+def on_run_validation(state) -> None:
     """Runs the demo incremental-IC/permutation/BHY validation harness.
 
     Args:

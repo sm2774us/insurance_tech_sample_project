@@ -26,12 +26,11 @@ def test_run_full_stack_terminates_api_subprocess_on_gui_exit() -> None:
     with (
         mock.patch("subprocess.Popen", return_value=fake_proc) as popen,
         mock.patch("fig_quant.web.gui.build_gui", return_value=fake_gui),
-        mock.patch("time.sleep"),
+        mock.patch("time.sleep"),pytest.raises(KeyboardInterrupt)
     ):
-        with pytest.raises(KeyboardInterrupt):
-            server_module.run_full_stack(
-                api_host="127.0.0.1", api_port=8001, gui_host="127.0.0.1", gui_port=8000
-            )
+        server_module.run_full_stack(
+            api_host="127.0.0.1", api_port=8001, gui_host="127.0.0.1", gui_port=8000
+        )
 
     popen.assert_called_once()
     called_args = popen.call_args[0][0]
@@ -49,9 +48,8 @@ def test_run_full_stack_raises_if_api_subprocess_dies_immediately() -> None:
 
     with (
         mock.patch("subprocess.Popen", return_value=fake_proc),
-        mock.patch("time.sleep"),
+        mock.patch("time.sleep"),pytest.raises(RuntimeError, match="exited immediately")
     ):
-        with pytest.raises(RuntimeError, match="exited immediately"):
-            server_module.run_full_stack(
-                api_host="127.0.0.1", api_port=8001, gui_host="127.0.0.1", gui_port=8000
-            )
+        server_module.run_full_stack(
+            api_host="127.0.0.1", api_port=8001, gui_host="127.0.0.1", gui_port=8000
+        )

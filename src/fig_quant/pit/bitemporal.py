@@ -27,7 +27,7 @@ import pathlib
 import duckdb
 import pyarrow as pa
 
-_END_OF_TIME = dt.datetime(9999, 12, 31, tzinfo=dt.timezone.utc)
+_END_OF_TIME = dt.datetime(9999, 12, 31, tzinfo=dt.UTC)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

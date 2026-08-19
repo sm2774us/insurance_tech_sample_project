@@ -8,7 +8,7 @@ from fig_quant.pit.bitemporal import BitemporalRecord, BitemporalStore
 
 
 def _dt(y: int, m: int, d: int) -> dt.datetime:
-    return dt.datetime(y, m, d, tzinfo=dt.timezone.utc)
+    return dt.datetime(y, m, d, tzinfo=dt.UTC)
 
 
 def test_as_of_blocks_ingestion_lookahead(tmp_path) -> None:

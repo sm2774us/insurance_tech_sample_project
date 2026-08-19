@@ -134,7 +134,7 @@ class CANNRegressor:
     _sigma: np.ndarray = dataclasses.field(init=False, default=None)
     _net: TwoLayerResidualNet = dataclasses.field(init=False, default=None)
 
-    def fit(self, x: np.ndarray, y: np.ndarray, epochs: int = 500) -> "CANNRegressor":
+    def fit(self, x: np.ndarray, y: np.ndarray, epochs: int = 500) -> CANNRegressor:
         """Fits the GLM floor, then the residual net on log-residuals.
 
         Args:

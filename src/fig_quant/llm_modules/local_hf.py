@@ -29,7 +29,7 @@ class LocalHfLLM(BaseLLM):
     device: str = "cpu"
 
     @functools.cached_property
-    def _pipeline(self):  # noqa: ANN202 - lazy import, external type
+    def _pipeline(self):
         import torch
         from transformers import pipeline
 
