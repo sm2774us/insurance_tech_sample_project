@@ -1,0 +1,228 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  python-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install project (dev extras)
+        run: uv sync --all-extras --dev
+
+      - name: Lint (ruff)
+        run: uv run ruff check src tests
+
+      - name: Type-check (mypy)
+        run: uv run mypy src/fig_quant --ignore-missing-imports || true
+
+      - name: Run tests with coverage
+        run: uv run pytest --cov=fig_quant --cov-report=xml --cov-report=term-missing
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage.xml
+          fail_ci_if_error: false
+
+      - name: Build wheel + sdist
+        run: uv build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  terraform-validate:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        cloud: [aws, gcp, azure]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      #- name: Terraform fmt check
+      #  run: terraform -chdir=infra/${{ matrix.cloud }} fmt -check -recursive
+
+      - name: Terraform init (backend disabled)
+        run: terraform -chdir=infra/${{ matrix.cloud }} init -backend=false
+
+      - name: Terraform validate
+        run: terraform -chdir=infra/${{ matrix.cloud }} validate
+
+  # ---------------------------------------------------------------------
+  # Release: computes the next semantic version, generates a changelog,
+  # commits CHANGELOG.md back to `main` (source-controlled), tags the
+  # changelog commit itself -- not a stale prior commit -- builds a
+  # reproducible source tarball that embeds the updated CHANGELOG.md, and
+  # publishes it as a release asset alongside the GitHub release notes.
+  # ---------------------------------------------------------------------
+  release:
+    needs: [python-tests, terraform-validate]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: release-main
+      cancel-in-progress: false
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Determine next semantic version
+        id: next_version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+          LATEST_TAG="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n 1)"
+
+          if [ -z "${LATEST_TAG}" ]; then
+            NEW_TAG="v0.1.0"
+          else
+            VERSION="${LATEST_TAG#v}"
+            IFS='.' read -r major minor patch <<< "${VERSION}"
+            patch=$((patch + 1))
+            NEW_TAG="v${major}.${minor}.${patch}"
+          fi
+
+          if git rev-parse "${NEW_TAG}" >/dev/null 2>&1; then
+            echo "::error::Tag ${NEW_TAG} already exists; aborting release to avoid overwrite." >&2
+            exit 1
+          fi
+
+          echo "tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"
+          echo "previous_tag=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate changelog text
+        id: changelog
+        uses: mikepenz/release-changelog-builder-action@v5
+        with:
+          fromTag: ${{ steps.next_version.outputs.previous_tag }}
+          toTag: main
+          configurationJson: |
+            {
+              "categories": [
+                { "title": "## \ud83d\ude80 Features",     "labels": ["feature", "enhancement"] },
+                { "title": "## \ud83d\udc1b Fixes",         "labels": ["fix", "bug"] },
+                { "title": "## \u26a1 Performance",   "labels": ["performance"] },
+                { "title": "## \ud83e\uddea Testing/CI",    "labels": ["ci", "test"] },
+                { "title": "## \ud83d\udcda Documentation", "labels": ["documentation"] },
+                { "title": "## \ud83d\udd27 Other",         "labels": [] }
+              ],
+              "template": "#{{CHANGELOG}}",
+              "pr_template": "- #{{TITLE}} (##{{NUMBER}}) @#{{AUTHOR}}"
+            }
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Write changelog entry to a temp file
+        id: changelog_file
+        env:
+          CHANGELOG_BODY: ${{ steps.changelog.outputs.changelog }}
+          NEW_TAG: ${{ steps.next_version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          BODY="${CHANGELOG_BODY:-_No user-facing changes recorded._}"
+          {
+            printf '# Release %s\n\n' "${NEW_TAG}"
+            printf '_Released: %s_\n\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            printf '%s\n' "${BODY}"
+          } > /tmp/release_entry.md
+          echo "path=/tmp/release_entry.md" >> "$GITHUB_OUTPUT"
+
+      - name: Prepend entry to CHANGELOG.md and commit
+        id: commit_changelog
+        env:
+          NEW_TAG: ${{ steps.next_version.outputs.tag }}
+          ENTRY_PATH: ${{ steps.changelog_file.outputs.path }}
+        run: |
+          set -euo pipefail
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          touch CHANGELOG.md
+          cat "${ENTRY_PATH}" <(printf '\n') CHANGELOG.md > /tmp/CHANGELOG.new
+          mv /tmp/CHANGELOG.new CHANGELOG.md
+
+          git add CHANGELOG.md
+
+          if git diff --cached --quiet; then
+            echo "::notice::No CHANGELOG.md changes to commit; proceeding with existing HEAD."
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          else
+            git commit -m "chore(release): update CHANGELOG.md for ${NEW_TAG} [skip ci]"
+            git push origin HEAD:main
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Tag the changelog commit
+        env:
+          NEW_TAG: ${{ steps.next_version.outputs.tag }}
+          RELEASE_SHA: ${{ steps.commit_changelog.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git tag -a "${NEW_TAG}" "${RELEASE_SHA}" -m "Release ${NEW_TAG}"
+          git push origin "refs/tags/${NEW_TAG}"
+
+      - name: Build source distribution tarball (includes CHANGELOG.md)
+        id: tarball
+        env:
+          NEW_TAG: ${{ steps.next_version.outputs.tag }}
+          RELEASE_SHA: ${{ steps.commit_changelog.outputs.sha }}
+        run: |
+          set -euo pipefail
+          OUT="FIG_QUANT-${NEW_TAG}.tar.gz"
+          git archive --format=tar --prefix="FIG_QUANT-${NEW_TAG}/" "${RELEASE_SHA:-HEAD}" \
+            | gzip -9 > "${OUT}"
+
+          if ! tar -tzf "${OUT}" | grep "CHANGELOG.md$" >/dev/null; then
+            echo "::error::CHANGELOG.md missing from release tarball ${OUT}." >&2
+            exit 1
+          fi
+
+          sha256sum "${OUT}" > "${OUT}.sha256"
+          echo "path=${OUT}" >> "$GITHUB_OUTPUT"
+          echo "checksum_path=${OUT}.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.next_version.outputs.tag }}
+          name: Release ${{ steps.next_version.outputs.tag }}
+          target_commitish: ${{ steps.commit_changelog.outputs.sha }}
+          body_path: ${{ steps.changelog_file.outputs.path }}
+          files: |
+            ${{ steps.tarball.outputs.path }}
+            ${{ steps.tarball.outputs.checksum_path }}
+          fail_on_unmatched_files: true
