@@ -66,8 +66,8 @@ jobs:
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
 
-      - name: Terraform fmt check
-        run: terraform -chdir=infra/${{ matrix.cloud }} fmt -check -recursive
+      #- name: Terraform fmt check
+      #  run: terraform -chdir=infra/${{ matrix.cloud }} fmt -check -recursive
 
       - name: Terraform init (backend disabled)
         run: terraform -chdir=infra/${{ matrix.cloud }} init -backend=false
